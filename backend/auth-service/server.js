@@ -22,7 +22,7 @@ async function initDB() {
                 host: process.env.DB_HOST || 'localhost',
                 port: process.env.DB_PORT || 3306,
                 user: process.env.DB_USER || 'root',
-                password: process.env.DB_PASSWORD || 'root1234',
+                password: process.env.DB_PASSWORD,
                 database: process.env.DB_NAME || 'sms_auth',
                 waitForConnections: true,
                 connectionLimit: 10,
@@ -71,10 +71,11 @@ app.post('/api/auth/login', async (req, res) => {
         // Update last_login timestamp to current time
         const loginTime = new Date();
         await db.query('UPDATE admin SET last_login = ? WHERE id = ?', [loginTime, admin.id]);
-
+        
+         // Token creates
         const token = jwt.sign(
             { id: admin.id, username: admin.username, full_name: admin.full_name },
-            process.env.JWT_SECRET || 'sms_secret_key_2026',
+            process.env.JWT_SECRET,
             { expiresIn: '8h' }
         );
 
@@ -125,13 +126,19 @@ app.get('/health', (req, res) => res.json({ status: 'ok', service: 'auth-service
 async function seedAdmin() {
     const [rows] = await db.query('SELECT COUNT(*) as cnt FROM admin');
     if (rows[0].cnt === 0) {
-        const defaultPassword = 'Admin@1234';
-        const hash = await bcrypt.hash(defaultPassword, 10);
+        const adminUsername = process.env.ADMIN_USERNAME;
+        const adminPassword = process.env.ADMIN_PASSWORD;
+
+        if (!adminUsername || !adminPassword) {
+            throw new Error('ADMIN_USERNAME and ADMIN_PASSWORD are required');
+        }
+
+        const hash = await bcrypt.hash(adminPassword, 10);
         await db.query(
             `INSERT INTO admin (username, password_hash, full_name, email) VALUES (?, ?, ?, ?)`,
-            ['admin', hash, 'System Administrator', 'admin@kdu.ac.lk']
+            [adminUsername, hash, 'System Administrator', 'admin@kdu.ac.lk']
         );
-        console.log('Auth Service: Default admin seeded (username: admin, password: Admin@1234)');
+        console.log('Auth Service: Default admin seeded from environment variables');
     }
 }
 

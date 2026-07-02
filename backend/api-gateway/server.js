@@ -23,6 +23,7 @@ app.use(cors({
     credentials: true,
 }));
 
+app.use(express.json());
 app.use(morgan('dev'));
 
 // JWT Verification Middleware
@@ -33,7 +34,7 @@ function verifyToken(req, res, next) {
     }
     const token = authHeader.split(' ')[1];
     try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'sms_secret_key_2026');
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
         req.headers['x-admin-id'] = String(decoded.id);
         req.headers['x-admin-username'] = decoded.username;
         next();
@@ -50,11 +51,34 @@ const proxyOptions = {
     proxyReqPathResolver: (req) => req.originalUrl
 };
 
-// ── Auth routes (public: login only) ─────────────────────────────────────────
-app.use('/api/auth/login', proxy(AUTH_URL, proxyOptions));
-app.use('/api/auth', verifyToken, proxy(AUTH_URL, proxyOptions));
+// Auth routes 
+// Keep login public and protect only the auth endpoints that require a token.
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        const response = await fetch(`${AUTH_URL}/api/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(req.body),
+        });
 
-// ── Protected routes ──────────────────────────────────────────────────────────
+        const body = await response.text();
+        res.status(response.status);
+
+        const contentType = response.headers.get('content-type');
+        if (contentType) {
+            res.set('content-type', contentType);
+        }
+
+        return res.send(body);
+    } catch (err) {
+        console.error(err);
+        return res.status(500).json({ message: 'Login gateway error' });
+    }
+});
+app.post('/api/auth/logout', verifyToken, proxy(AUTH_URL, proxyOptions));
+app.get('/api/auth/profile', verifyToken, proxy(AUTH_URL, proxyOptions));
+
+// Protected routes
 app.use('/api/students', verifyToken, proxy(STUDENT_URL, proxyOptions));
 app.use('/api/courses', verifyToken, proxy(COURSE_URL, proxyOptions));
 app.use('/api/enrollments', verifyToken, proxy(ENROLL_URL, proxyOptions));

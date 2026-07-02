@@ -19,7 +19,7 @@ async function initDB() {
                 host: process.env.DB_HOST || 'localhost',
                 port: process.env.DB_PORT || 3306,
                 user: process.env.DB_USER || 'root',
-                password: process.env.DB_PASSWORD || 'root1234',
+                password: process.env.DB_PASSWORD,
                 database: process.env.DB_NAME || 'sms_enrollments',
                 waitForConnections: true,
                 connectionLimit: 10,
@@ -113,6 +113,15 @@ app.post('/api/enrollments/complete-semester', async (req, res) => {
             return res.status(400).json({ message: 'student_number and semester_label are required' });
         }
 
+        // Validate student exists in the enrollment table before proceeding
+        const [studentCheck] = await db.query(
+            'SELECT DISTINCT student_number FROM enrollment WHERE student_number = ? LIMIT 1',
+            [student_number]
+        );
+        if (studentCheck.length === 0) {
+            return res.status(404).json({ message: 'Student not found or has no enrollment records' });
+        }
+
         // Get all current enrollments for this student
         const [enrollments] = await db.query(
             'SELECT * FROM enrollment WHERE student_number = ?',
@@ -171,6 +180,19 @@ app.get('/api/enrollments/history/:studentNumber', async (req, res) => {
             courses: typeof r.courses === 'string' ? JSON.parse(r.courses) : r.courses
         }));
         res.json(history);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// DELETE /api/enrollments/student/:studentNumber — Remove all enrollments and history for a student
+app.delete('/api/enrollments/student/:studentNumber', async (req, res) => {
+    try {
+        const { studentNumber } = req.params;
+        await db.query('DELETE FROM enrollment WHERE student_number = ?', [studentNumber]);
+        await db.query('DELETE FROM enrollment_history WHERE student_number = ?', [studentNumber]);
+        res.json({ message: 'Student enrollments deleted successfully' });
     } catch (err) {
         console.error(err);
         res.status(500).json({ message: 'Server error' });

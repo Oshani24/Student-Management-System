@@ -19,7 +19,7 @@ async function initDB() {
                 host: process.env.DB_HOST || 'localhost',
                 port: process.env.DB_PORT || 3306,
                 user: process.env.DB_USER || 'root',
-                password: process.env.DB_PASSWORD || 'root1234',
+                password: process.env.DB_PASSWORD,
                 database: process.env.DB_NAME || 'sms_courses',
                 waitForConnections: true,
                 connectionLimit: 10,
@@ -146,6 +146,8 @@ app.delete('/api/courses/:id', async (req, res) => {
         const [existing] = await db.query('SELECT * FROM course WHERE id = ?', [id]);
         if (existing.length === 0) return res.status(404).json({ message: 'Course not found' });
 
+        // Cascade: remove all enrollments referencing this course before deleting
+        await db.query('DELETE FROM sms_enrollments.enrollment WHERE course_id = ?', [id]);
         await db.query('DELETE FROM course WHERE id = ?', [id]);
         await logAudit('Course Deleted', 'Delete', existing[0].code, existing[0].name);
         res.json({ message: 'Course deleted successfully' });

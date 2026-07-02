@@ -19,7 +19,7 @@ async function initDB() {
                 host: process.env.DB_HOST || 'localhost',
                 port: process.env.DB_PORT || 3306,
                 user: process.env.DB_USER || 'root',
-                password: process.env.DB_PASSWORD || 'root1234',
+                password: process.env.DB_PASSWORD,
                 database: process.env.DB_NAME || 'sms_students',
                 waitForConnections: true,
                 connectionLimit: 10,
@@ -65,7 +65,9 @@ async function generateStudentNumber(degreeProgram) {
     const prefix = DEGREE_PREFIX[degreeProgram];
     if (!prefix) throw new Error('Invalid degree program');
 
-    const intakeYear = process.env.INTAKE_YEAR || '26';
+    const intakeYear = process.env.INTAKE_YEAR;
+
+    if (!intakeYear) throw new Error('INTAKE_YEAR is required');
 
     const conn = await db.getConnection();
     try {
@@ -100,25 +102,56 @@ app.post('/api/students', async (req, res) => {
     try {
         const { first_name, last_name, email, phone, address, nic, date_of_birth, degree_program, academic_year, semester } = req.body;
 
-        if (!first_name || !last_name || !email || !phone || !address || !degree_program) {
-            return res.status(400).json({ message: 'Required fields: first_name, last_name, email, phone, address, degree_program' });
+        const normalizedFirstName = first_name?.trim();
+        const normalizedLastName = last_name?.trim();
+        const normalizedEmail = email?.trim();
+        const normalizedPhone = phone?.trim();
+        const normalizedAddress = address?.trim();
+        const normalizedNic = nic?.trim();
+        const normalizedDegreeProgram = degree_program?.trim();
+        const normalizedAcademicYear = academic_year?.trim();
+        const normalizedSemester = semester?.trim();
+
+        if (!normalizedFirstName || !normalizedLastName || !normalizedEmail || !normalizedPhone || !normalizedAddress || !normalizedNic || !date_of_birth || !normalizedDegreeProgram || !normalizedAcademicYear || !normalizedSemester) {
+            return res.status(400).json({ message: 'Required fields: first_name, last_name, email, phone, address, nic, date_of_birth, degree_program, academic_year, semester' });
         }
 
-        const student_number = await generateStudentNumber(degree_program);
+        // Check for duplicate NIC or email before generating a student number
+        const [duplicates] = await db.query(
+            'SELECT student_number FROM student WHERE nic = ? OR email = ? LIMIT 1',
+            [normalizedNic, normalizedEmail]
+        );
+        if (duplicates.length > 0) {
+            return res.status(409).json({ message: 'A student with this NIC or email is already registered' });
+        }
+
+        const student_number = await generateStudentNumber(normalizedDegreeProgram);
 
         await db.query(
             `INSERT INTO student 
        (student_number, first_name, last_name, email, phone, address, nic, date_of_birth, degree_program, academic_year, semester)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [student_number, first_name, last_name, email, phone, address, nic || null, date_of_birth || null, degree_program, academic_year || null, semester || null]
+            [
+                student_number,
+                normalizedFirstName,
+                normalizedLastName,
+                normalizedEmail,
+                normalizedPhone,
+                normalizedAddress,
+                normalizedNic,
+                date_of_birth,
+                normalizedDegreeProgram,
+                normalizedAcademicYear,
+                normalizedSemester
+            ]
         );
 
-        await logAudit('Student Registered', 'Create', student_number, `${first_name} ${last_name}`);
+        await logAudit('Student Registered', 'Create', student_number, `${normalizedFirstName} ${normalizedLastName}`);
 
         res.status(201).json({ message: 'Student registered successfully', student_number });
     } catch (err) {
         console.error(err);
-        if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'Duplicate email or student number' });
+        if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'A student with this NIC, email, or student number already exists' });
         res.status(500).json({ message: 'Server error', detail: err.message });
     }
 });
@@ -199,6 +232,9 @@ app.delete('/api/students/:studentNumber', async (req, res) => {
         if (existing.length === 0) return res.status(404).json({ message: 'Student not found' });
 
         const studentName = `${existing[0].first_name} ${existing[0].last_name}`;
+        // Cascade: remove all enrollments and history via the enrollment-service
+        const enrollmentUrl = process.env.ENROLLMENT_SERVICE_URL || 'http://localhost:5004';
+        await fetch(`${enrollmentUrl}/api/enrollments/student/${encodeURIComponent(studentNumber)}`, { method: 'DELETE' });
         await db.query('DELETE FROM student WHERE student_number = ?', [studentNumber]);
         await logAudit('Student Deleted', 'Delete', studentNumber, studentName);
 
